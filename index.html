@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ar">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
@@ -75,18 +75,21 @@
 </head>
 <body>
   <main>
+    <h2 style="text-align:center;margin-bottom:25px;">Top Offers</h2>
     <div id="offers-container" class="offer-grid"></div>
+    <p id="status" style="text-align:center;color:#666;margin-top:20px;"></p>
   </main>
 
   <script>
     const container = document.getElementById("offers-container");
+    const status = document.getElementById("status");
     let allOffers = [];
 
     function addOfferCard(img, title, url, payout, desc="") {
       const card = document.createElement("div");
       card.className = "offer-card";
       card.innerHTML = `
-        <img src="${img}" alt="Offer">
+        <img src="${img || 'https://via.placeholder.com/100'}" alt="Offer">
         <div class="offer-text">
           <div class="offer-title">${title}</div>
           <div class="offer-desc">${desc || ""}</div>
@@ -99,6 +102,11 @@
 
     function renderOffers() {
       container.innerHTML = "";
+      if (allOffers.length === 0) {
+        status.textContent = "No offers available in your region right now. Please check back later.";
+        return;
+      }
+      status.textContent = "";
       allOffers
         .sort((a,b) => parseFloat(b.dataset.payout) - parseFloat(a.dataset.payout)) 
         .slice(0, 5) 
@@ -108,37 +116,50 @@
     async function loadOgadsOffers() {
       const apiKey = "35487|XTXaEOtM1IsVrP6d8TtNgQp1vfXxBpliRee8gBqBeaac69e8";
       const blockedOgadsIds = ["66714","66723","65862"];
+      status.textContent = "Loading offers...";
       try {
-        const ipRes = await fetch("https://api.ipify.org?format=json");
-        const ipData = await ipRes.json();
+        let ipData = { ip: "8.8.8.8" }; // Default to US IP
+        try {
+          const ipRes = await fetch("https://api.ipify.org?format=json");
+          if (ipRes.ok) ipData = await ipRes.json();
+        } catch(e) {
+          console.warn("IP detection failed, using fallback IP (US)");
+        }
+
         const apiUrl = new URL("https://unlockcontent.net/api/v2");
         apiUrl.searchParams.append("ip", ipData.ip);
         apiUrl.searchParams.append("user_agent", navigator.userAgent);
         apiUrl.searchParams.append("limit", "1000");
         apiUrl.searchParams.append("ctype", "0");
+
         const res = await fetch(apiUrl, { headers: { Authorization: `Bearer ${apiKey}` } });
-        if(!res.ok) throw new Error("OGAds fetch failed");
+        if(!res.ok) throw new Error("OGAds fetch failed (status: " + res.status + ")");
         const data = await res.json();
         const offers = data.offers || [];
-        if(offers && offers.length) {
-          offers
-            .filter(o => !/email submit|survey/i.test(o.name||"")) 
-            .filter(o => !blockedOgadsIds.includes(String(o.offer_id))) 
-            .filter(o => !(o.adcopy || "").includes("Level")) 
-            .filter(o => {
-              const desc = (o.adcopy || "")
-              return desc.includes("30") || desc.includes("VALID"); 
-            })
-            .forEach(o => {
-              const img = o.icon_url || o.picture || "";
-              const title = (o.name || o.name_short || "No title").split("-")[0].trim();
-              const url = o.click_url || o.link || o.offer_url || o.url;
-              addOfferCard(img, title, url, o.payout || 0, o.adcopy || "");
-            });
-          renderOffers();
+
+        console.log("Offers fetched:", offers.length, "from IP:", ipData.ip);
+
+        if(offers.length === 0) {
+          status.textContent = "No offers available for your region (IP: " + ipData.ip + ").";
+          return;
         }
+
+        offers
+          .filter(o => !/email submit|survey/i.test(o.name||"")) 
+          .filter(o => !blockedOgadsIds.includes(String(o.offer_id))) 
+          .forEach(o => {
+            const img = o.icon_url || o.picture || "";
+            const title = (o.name || o.name_short || "Untitled Offer").split("-")[0].trim();
+            const url = o.click_url || o.link || o.offer_url || o.url;
+            const desc = o.adcopy || "";
+            addOfferCard(img, title, url, o.payout || 0, desc);
+          });
+
+        renderOffers();
+
       } catch(err) {
         console.error("OGAds error:", err);
+        status.textContent = "Unable to load offers (network or API error).";
       }
     }
 
@@ -146,5 +167,3 @@
   </script>
 </body>
 </html>
-
-
