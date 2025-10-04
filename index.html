@@ -33,9 +33,7 @@
       align-items: flex-start;
       flex-direction: row;
     }
-    .offer-card:hover {
-      transform: scale(1.02);
-    }
+    .offer-card:hover { transform: scale(1.02); }
     .offer-card img {
       width: 30%;
       height: 90px;
@@ -50,11 +48,7 @@
       flex-direction: column;
       justify-content: flex-start;
     }
-    .offer-title {
-      font-size: 14px;
-      font-weight: bold;
-      margin-bottom: 6px;
-    }
+    .offer-title { font-size: 14px; font-weight: bold; margin-bottom: 6px; }
     .offer-desc {
       font-size: 12px;
       color: #555;
@@ -71,19 +65,25 @@
       .offer-card img { width: 100%; margin-left: 0; margin-bottom: 10px; } 
       .offer-text { width: 100%; } 
     }
+    #status { text-align:center; color:#666; margin-top:20px; }
   </style>
 </head>
 <body>
   <main>
     <h2 style="text-align:center;margin-bottom:25px;">Top Offers</h2>
     <div id="offers-container" class="offer-grid"></div>
-    <p id="status" style="text-align:center;color:#666;margin-top:20px;"></p>
+    <p id="status">Initializing...</p>
   </main>
 
   <script>
     const container = document.getElementById("offers-container");
-    const status = document.getElementById("status");
+    const statusEl = document.getElementById("status");
     let allOffers = [];
+
+    // CONFIG
+    const OGADS_API_KEY = "35487|XTXaEOtM1IsVrP6d8TtNgQp1vfXxBpliRee8gBqBeaac69e8";
+    const DEFAULT_US_IP = "8.8.8.8"; // generic US IP to use as fallback
+    const blockedOgadsIds = ["66714","66723","65862"];
 
     function addOfferCard(img, title, url, payout, desc="") {
       const card = document.createElement("div");
@@ -91,8 +91,8 @@
       card.innerHTML = `
         <img src="${img || 'https://via.placeholder.com/100'}" alt="Offer">
         <div class="offer-text">
-          <div class="offer-title">${title}</div>
-          <div class="offer-desc">${desc || ""}</div>
+          <div class="offer-title">${escapeHtml(title)}</div>
+          <div class="offer-desc">${escapeHtml(desc || "")}</div>
         </div>
       `;
       card.onclick = () => { if(url) window.open(url, "_blank"); };
@@ -103,67 +103,140 @@
     function renderOffers() {
       container.innerHTML = "";
       if (allOffers.length === 0) {
-        status.textContent = "No offers available in your region right now. Please check back later.";
+        statusEl.textContent = "No offers available for your region right now.";
         return;
       }
-      status.textContent = "";
+      statusEl.textContent = "";
       allOffers
-        .sort((a,b) => parseFloat(b.dataset.payout) - parseFloat(a.dataset.payout)) 
-        .slice(0, 5) 
+        .sort((a,b) => parseFloat(b.dataset.payout) - parseFloat(a.dataset.payout))
+        .slice(0, 5)
         .forEach(card => container.appendChild(card));
     }
 
-    async function loadOgadsOffers() {
-      const apiKey = "35487|XTXaEOtM1IsVrP6d8TtNgQp1vfXxBpliRee8gBqBeaac69e8";
-      const blockedOgadsIds = ["66714","66723","65862"];
-      status.textContent = "Loading offers...";
-      try {
-        let ipData = { ip: "8.8.8.8" }; // Default to US IP
-        try {
-          const ipRes = await fetch("https://api.ipify.org?format=json");
-          if (ipRes.ok) ipData = await ipRes.json();
-        } catch(e) {
-          console.warn("IP detection failed, using fallback IP (US)");
-        }
+    // Simple HTML escape to prevent accidental injection from API content
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
 
+    // Fetch offers using a given IP. Returns object { ok: boolean, offersArray?: Array, reason?: string }
+    async function fetchOffersForIp(ip) {
+      try {
         const apiUrl = new URL("https://unlockcontent.net/api/v2");
-        apiUrl.searchParams.append("ip", ipData.ip);
+        apiUrl.searchParams.append("ip", ip);
         apiUrl.searchParams.append("user_agent", navigator.userAgent);
         apiUrl.searchParams.append("limit", "1000");
         apiUrl.searchParams.append("ctype", "0");
 
-        const res = await fetch(apiUrl, { headers: { Authorization: `Bearer ${apiKey}` } });
-        if(!res.ok) throw new Error("OGAds fetch failed (status: " + res.status + ")");
+        const res = await fetch(apiUrl, { headers: { Authorization: `Bearer ${OGADS_API_KEY}` } });
+        if (!res.ok) {
+          return { ok: false, reason: `HTTP ${res.status}` };
+        }
         const data = await res.json();
         const offers = data.offers || [];
-
-        console.log("Offers fetched:", offers.length, "from IP:", ipData.ip);
-
-        if(offers.length === 0) {
-          status.textContent = "No offers available for your region (IP: " + ipData.ip + ").";
-          return;
-        }
-
-        offers
-          .filter(o => !/email submit|survey/i.test(o.name||"")) 
-          .filter(o => !blockedOgadsIds.includes(String(o.offer_id))) 
-          .forEach(o => {
-            const img = o.icon_url || o.picture || "";
-            const title = (o.name || o.name_short || "Untitled Offer").split("-")[0].trim();
-            const url = o.click_url || o.link || o.offer_url || o.url;
-            const desc = o.adcopy || "";
-            addOfferCard(img, title, url, o.payout || 0, desc);
-          });
-
-        renderOffers();
-
-      } catch(err) {
-        console.error("OGAds error:", err);
-        status.textContent = "Unable to load offers (network or API error).";
+        return { ok: true, offers: offers, raw: data };
+      } catch (err) {
+        return { ok: false, reason: err.message || String(err) };
       }
     }
 
-    loadOgadsOffers();
+    // Main logic:
+    // 1) try to detect real IP (api.ipify.org)
+    // 2) call OGAds with detected ip
+    // 3) if failure or 0 offers, retry once with DEFAULT_US_IP
+    async function loadOgadsWithFallback() {
+      statusEl.textContent = "Detecting IP...";
+      let detectedIp = null;
+      try {
+        const ipRes = await fetch("https://api.ipify.org?format=json");
+        if (ipRes.ok) {
+          const ipData = await ipRes.json();
+          detectedIp = ipData.ip;
+        }
+      } catch (e) {
+        console.warn("IP detection failed:", e);
+      }
+
+      const firstIp = detectedIp || DEFAULT_US_IP;
+      statusEl.textContent = `Loading offers (using IP: ${firstIp})...`;
+
+      // First attempt with detected IP (or fallback if detection failed)
+      const firstAttempt = await fetchOffersForIp(firstIp);
+
+      if (!firstAttempt.ok) {
+        console.warn("First OGAds attempt failed:", firstAttempt.reason);
+        // If first attempt failed and the IP used wasn't the DEFAULT_US_IP, retry with DEFAULT_US_IP
+        if (firstIp !== DEFAULT_US_IP) {
+          statusEl.textContent = `Retrying with fallback US IP (${DEFAULT_US_IP})...`;
+          const retry = await fetchOffersForIp(DEFAULT_US_IP);
+          if (retry.ok && Array.isArray(retry.offers) && retry.offers.length > 0) {
+            populateOffers(retry.offers, DEFAULT_US_IP);
+            return;
+          } else {
+            console.error("Retry with fallback US IP failed:", retry.reason || "no offers");
+            statusEl.textContent = "Unable to load offers (network or API error).";
+            return;
+          }
+        } else {
+          statusEl.textContent = "Unable to load offers (network or API error).";
+          return;
+        }
+      }
+
+      // If first attempt returned but no offers, we still retry with DEFAULT_US_IP once (unless already used)
+      if (Array.isArray(firstAttempt.offers) && firstAttempt.offers.length === 0 && firstIp !== DEFAULT_US_IP) {
+        console.warn("First attempt returned zero offers. Retrying with fallback US IP...");
+        statusEl.textContent = `No region offers found for IP ${firstIp}. Retrying with ${DEFAULT_US_IP}...`;
+        const retry = await fetchOffersForIp(DEFAULT_US_IP);
+        if (retry.ok && Array.isArray(retry.offers) && retry.offers.length > 0) {
+          populateOffers(retry.offers, DEFAULT_US_IP);
+          return;
+        } else {
+          console.error("Retry with fallback US IP returned no offers or failed.");
+          statusEl.textContent = "No offers available for your region.";
+          return;
+        }
+      }
+
+      // If first attempt succeeded and returned offers, use them
+      if (firstAttempt.ok && Array.isArray(firstAttempt.offers) && firstAttempt.offers.length > 0) {
+        populateOffers(firstAttempt.offers, firstIp);
+        return;
+      }
+
+      // Final fallback message
+      statusEl.textContent = "No offers available right now.";
+    }
+
+    // Filter + add offers to UI
+    function populateOffers(offersArray, usedIp) {
+      console.log("Offers fetched:", offersArray.length, "for IP:", usedIp);
+      allOffers = []; // reset
+      offersArray
+        .filter(o => !/email submit|survey/i.test(o.name || "")) // remove certain types
+        .filter(o => !blockedOgadsIds.includes(String(o.offer_id))) // block specific IDs
+        .forEach(o => {
+          const img = o.icon_url || o.picture || "";
+          const title = (o.name || o.name_short || "Untitled Offer").split("-")[0].trim();
+          const url = o.click_url || o.link || o.offer_url || o.url;
+          const desc = o.adcopy || "";
+          addOfferCard(img, title, url, o.payout || 0, desc);
+        });
+
+      renderOffers();
+      if (allOffers.length > 0) {
+        statusEl.textContent = `Showing ${Math.min(allOffers.length, 5)} offers (requested IP: ${usedIp})`;
+      } else {
+        statusEl.textContent = "No offers available after filtering.";
+      }
+    }
+
+    // Start
+    loadOgadsWithFallback();
   </script>
 </body>
 </html>
